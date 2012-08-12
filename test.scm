@@ -16,13 +16,10 @@
 
 ; 文字列を変換する関数
 (define (encode str)
-(rs-encode rscode (u8vector->list (string->u8vector str)))
-)
+  (rs-encode rscode (u8vector->list (string->u8vector str))))
 
 (define (decode lst)
-(u8vector->string (list->u8vector (rs-decode rscode
-lst
-))))
+  (u8vector->string (list->u8vector (rs-decode rscode lst))))
 
 ; やってみる
 (encode "ABCDE")
