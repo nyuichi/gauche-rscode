@@ -4,6 +4,8 @@
     make-rscode
     rs-encode
     rs-decode
+    encode-string
+    decode-string
   ))
 
 (select-module rscode)
@@ -265,3 +267,8 @@
 ;    (drop r num-error-words)))
     (map (cut gf2-log-a gf2 <>) (reverse (drop r num-error-words)))))
 
+(define (encode-string rscode str)
+  (rs-encode rscode (u8vector->list (string->u8vector str))))
+
+(define (decode-string rscode lst)
+  (u8vector->string (list->u8vector (rs-decode rscode lst))))
