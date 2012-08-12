@@ -1,4 +1,12 @@
-(use srfi-27)
+(define-module rscode
+  (use srfi-27)
+  (export
+    make-rscode
+    rs-encode
+    rs-decode
+  ))
+
+(select-module rscode)
 
 
 (define (make-polynomial deg)
@@ -105,10 +113,10 @@
 	    (~ exp2val index)))))
 
 (define (gf2-pow-a gf2 exp)
-  (~ (~ gf2 'exp2val) (mod exp (~ gf2 'max-exp))))
+  (~ gf2 'exp2val (mod exp (~ gf2 'max-exp))))
 
 (define (gf2-log-a gf2 val)
-  (~ (~ gf2 'val2exp) val))
+  (~ gf2 'val2exp val))
 
 (define (add-offset offset list)
   (if (zero? offset)
@@ -205,52 +213,55 @@
       (values (gf2-div-poly gf2 y h)
 	      (gf2-div-poly gf2 n h)))))
 
+(define-class <rscode> ()
+  ((gf2         :init-keyword :gf2)
+   (g           :init-keyword :g)
+   (num-total-words :init-keyword :num-total-words)
+   (num-data-words  :init-keyword :num-data-words)
+   (num-error-words :init-keyword :num-error-words)))
 
-(define (sample-cipher gf2)
-  (let* ((g (get-generator-polynomial-for-rs gf2 7))
-	 (j (list 122 100 122 100 122 100 122 54 232 180 50 148 126 232 164 2 153 149 6))
-	 (I (add-offset 7 (map (lambda (k) (gf2-pow-a gf2 k)) j)))
-	 (result (gf2-mod-poly gf2 I g))
-	 (c (gf2-add-poly gf2 result I)))
-    c))
-
-(define (check gf2 c)
-  (let ((r (polynomial-copy c))
-	(e* (make-polynomial 25)))
-    ;; Randomize
-    (do ((l (+ 1 (random-integer 3)) (- l 1)))
-    	((<= l 0))
-      (set! (~ r (random-integer (polynomial-deg r))) (random-integer 256)))
-    ;; (set! (~ r 16) 7)
-    ;; (set! (~ r 3) 243)
-    (do ((l 0 (+ l 1)))
-    	((> l 25))
-      (unless (= (~ r l) (~ c l))
-    	      (set! (~ e* l) (logxor (~ r l) (~ c l)))))
-    (print "randomized\n" "e*:" e* "\n" "r :" r)
-    (let* ((s (map (lambda (i) (gf2-calc-poly gf2 r (gf2-pow-a gf2 i)))
-		  (iota 7)))
-	   (z (list 0 0 0 0 0 0 0 1)))
-      (print "syndrome:" s)
-      (receive (sigma omega) (gf2-solve-key-equation gf2 z s)
-	       (print "sigma:" sigma)
-	       (print "omega:" omega)
-	       (let* ((x (list 0 1))
-		      (denom (gf2-mul-poly gf2 x (gf2-dif-poly gf2 sigma)))
-		      (e (make-polynomial 25)))
-		 (print "denom:" denom)
-		 (dotimes (i 25)
-			  (when (zero? (gf2-calc-poly gf2 sigma (gf2-pow-a gf2 (- (~ gf2 'max-exp) i))))
-				(set! (~ e i) (gf2-div gf2
-						       (gf2-calc-poly gf2 omega (gf2-pow-a gf2 (- (~ gf2 'max-exp) i)))
-						       (gf2-calc-poly gf2 denom (gf2-pow-a gf2 (- (~ gf2 'max-exp) i)))))))
-		 (print "e :" e "\n" "e*:" e*)
-		 (if (polynomial= e e*)
-		     (print "GOOD")
-		     (print "BAD")))))))
+(define (make-rscode num-total-words num-data-words :optional (gf2-exp 8) (gf2-prim-poly #f))
+  (let* ((gf2 (make-galois-field-2 gf2-exp (or gf2-prim-poly (get-poly-from-n gf2-exp))))
+         (num-error-words (- num-total-words num-data-words))
+         (g   (get-generator-polynomial-for-rs gf2 num-error-words)))
+    (make <rscode>
+          :gf2 gf2
+          :g g
+          :num-total-words num-total-words
+          :num-data-words  num-data-words
+          :num-error-words num-error-words)))
 
 
-(define (test)
-  (let* ((gf2 (make-galois-field-2 8 (get-poly-from-n 8)))
-	 (c (sample-cipher gf2)))
-      (dotimes (_ 100) (check gf2 c))))
+(define (rs-encode rscode data-words)
+  ;; TODO: check data-words size
+  (let* ((gf2 (~ rscode 'gf2))
+         (I (add-offset (~ rscode 'num-error-words) (map (cut gf2-pow-a gf2 <>) (reverse data-words))))
+         (g (~ rscode 'g)))
+    (gf2-add-poly gf2 (gf2-mod-poly gf2 I g) I)))
+
+
+(define (rs-decode rscode encoded-words)
+  ;;
+  (let* ((gf2 (~ rscode 'gf2))
+         (r (polynomial-copy encoded-words))
+         (num-total-words (~ rscode 'num-total-words))
+         (num-error-words (~ rscode 'num-error-words))
+         (s (map (lambda (i) (gf2-calc-poly gf2 r (gf2-pow-a gf2 i)))
+                 (iota num-error-words)))
+         (z (add-offset num-error-words '(1))))
+;    (print "syndrome:" s)
+    (receive (sigma omega) (gf2-solve-key-equation gf2 z s)
+;      (print "sigma:" sigma)
+;      (print "omega:" omega)
+      (let* ((x (list 0 1))
+             (denom (gf2-mul-poly gf2 x (gf2-dif-poly gf2 sigma))))
+;        (print "denom:" denom)
+        (dotimes (i (- num-total-words 1))
+          (when (zero? (gf2-calc-poly gf2 sigma (gf2-pow-a gf2 (- (~ gf2 'max-exp) i))))
+            (set! (~ r i) (gf2-add gf2 (~ r i)
+                                   (gf2-div gf2
+                                            (gf2-calc-poly gf2 omega (gf2-pow-a gf2 (- (~ gf2 'max-exp) i)))
+                                            (gf2-calc-poly gf2 denom (gf2-pow-a gf2 (- (~ gf2 'max-exp) i))))))))))
+;    (drop r num-error-words)))
+    (map (cut gf2-log-a gf2 <>) (reverse (drop r num-error-words)))))
+
